@@ -1,0 +1,43 @@
+version: '3.8'
+
+services:
+  hermes:
+    build:
+      context: .
+      dockerfile: Dockerfile.hermes
+    ports:
+      - "9000:9000"
+    volumes:
+      - ./data:/app/data
+      - ./logs:/app/logs
+      - shared-storage:/shared
+    environment:
+      - TOGETHER_API_KEY=${TOGETHER_API_KEY}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - HERMES_MODEL=${HERMES_MODEL}
+      - MAX_AGENTS=${MAX_AGENTS}
+    depends_on:
+      - db
+
+  db:
+    image: python:3.11-slim
+    volumes:
+      - ./data:/data
+    command: echo "SQLite lives in /data/superagent.db"
+
+  nginx:
+    image: nginx:alpine
+    ports:
+      - "80:80"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf
+    depends_on:
+      - hermes
+
+volumes:
+  shared-storage:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ./shared

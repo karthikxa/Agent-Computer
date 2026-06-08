@@ -1,0 +1,11 @@
+FROM python:3.11-slim
+
+WORKDIR /app
+
+RUN pip install --no-cache-dir aiohttp docker sqlalchemy aiosqlite pydantic together
+
+COPY . /app
+
+EXPOSE 9000
+
+CMD ["python", "-m", "hermes"]
