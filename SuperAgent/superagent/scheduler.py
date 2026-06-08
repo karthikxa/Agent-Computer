@@ -101,7 +101,8 @@ class TaskScheduler:
         """Schedule a one-shot task."""
 
         self.start()
-        job_id = self.scheduler.add_job(callback, "date", run_date=when, **kwargs)
+        job = self.scheduler.add_job(callback, "date", run_date=when, **kwargs)
+        job_id = job.id if hasattr(job, "id") else job
         self._jobs[job_id] = ScheduledTask(task_id=job_id, trigger="date", metadata={"run_date": when.isoformat(), **kwargs})
         return job_id
 
@@ -109,7 +110,8 @@ class TaskScheduler:
         """Schedule a recurring task."""
 
         self.start()
-        job_id = self.scheduler.add_job(callback, "interval", seconds=seconds, **kwargs)
+        job = self.scheduler.add_job(callback, "interval", seconds=seconds, **kwargs)
+        job_id = job.id if hasattr(job, "id") else job
         self._jobs[job_id] = ScheduledTask(task_id=job_id, trigger="interval", metadata={"seconds": seconds, **kwargs})
         return job_id
 

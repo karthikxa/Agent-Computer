@@ -7,11 +7,14 @@ import base64
 import hmac
 import hashlib
 import imaplib
+import logging
 import re
 import struct
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 from infrastructure.task_db import TaskDatabase
 from superagent.ocr import OCRLayer
@@ -25,6 +28,32 @@ class AuthWorker:
     browser: BrowserWorker
     task_db: TaskDatabase | None = None
     escalation_webhook: str | None = None
+    credential_vault: dict[str, dict[str, str]] = field(default_factory=dict)
+
+    async def store_credential(self, site: str, username: str, password: str) -> None:
+        """Store site credentials securely in the vault."""
+        self.credential_vault[site] = {"username": username, "password": password}
+
+    async def get_credential(self, site: str) -> tuple[str, str] | None:
+        """Retrieve credentials for a specific site."""
+        creds = self.credential_vault.get(site)
+        if creds:
+            return creds["username"], creds["password"]
+        return None
+
+    async def automate_sso(self, sso_provider: str, credentials_site: str) -> bool:
+        """Automate OAuth SSO popup flows using vault credentials."""
+        creds = await self.get_credential(credentials_site)
+        if not creds:
+            logger.warning("SSO credentials not found in vault.")
+            return False
+        username, password = creds
+        # 1. Click on the SSO provider button
+        await self.browser.click(sso_provider)
+        # 2. Fill login details on the redirected/popup auth page
+        await self.browser.fill_form({"username": username, "email": username, "password": password})
+        await self.browser.click("Sign in")
+        return True
 
     async def login(self, site: str, username: str, password: str) -> bool:
         """Find and submit a login form."""

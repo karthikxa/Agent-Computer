@@ -23,8 +23,9 @@ class MemoryRecord:
 class AgentMemory:
     """Store and retrieve memories using SQLite with FTS5 where available."""
 
-    def __init__(self, db_path: str | Path) -> None:
+    def __init__(self, db_path: str | Path, max_records: int = 1000) -> None:
         self.db_path = Path(db_path)
+        self.max_records = max_records
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._init_db()
 
@@ -34,28 +35,32 @@ class AgentMemory:
         return conn
 
     def _init_db(self) -> None:
-        with self._connect() as conn:
-            conn.execute(
-                """
-                CREATE TABLE IF NOT EXISTS memories (
-                    memory_id TEXT PRIMARY KEY,
-                    text TEXT NOT NULL,
-                    tags TEXT NOT NULL DEFAULT '[]',
-                    metadata TEXT NOT NULL DEFAULT '{}',
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                )
-                """
-            )
-            try:
+        conn = self._connect()
+        try:
+            with conn:
                 conn.execute(
                     """
-                    CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts
-                    USING fts5(memory_id, text, tags)
+                    CREATE TABLE IF NOT EXISTS memories (
+                        memory_id TEXT PRIMARY KEY,
+                        text TEXT NOT NULL,
+                        tags TEXT NOT NULL DEFAULT '[]',
+                        metadata TEXT NOT NULL DEFAULT '{}',
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    )
                     """
                 )
-            except sqlite3.OperationalError:
-                pass
+                try:
+                    conn.execute(
+                        """
+                        CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts
+                        USING fts5(memory_id, text, tags)
+                        """
+                    )
+                except sqlite3.OperationalError:
+                    pass
+        finally:
+            conn.close()
 
     async def store(self, record: MemoryRecord) -> None:
         """Persist a memory record."""
@@ -65,32 +70,45 @@ class AgentMemory:
     def _store_sync(self, record: MemoryRecord) -> None:
         conn = self._connect()
         try:
-            conn.execute(
-                """
-                INSERT INTO memories(memory_id, text, tags, metadata, updated_at)
-                VALUES(?, ?, ?, ?, CURRENT_TIMESTAMP)
-                ON CONFLICT(memory_id) DO UPDATE SET
-                    text=excluded.text,
-                    tags=excluded.tags,
-                    metadata=excluded.metadata,
-                    updated_at=CURRENT_TIMESTAMP
-                """,
-                (
-                    record.memory_id,
-                    record.text,
-                    json.dumps(record.tags),
-                    json.dumps(record.metadata),
-                ),
-            )
-            try:
-                conn.execute("DELETE FROM memories_fts WHERE memory_id = ?", (record.memory_id,))
+            with conn:
+                # Quota Eviction
+                cursor = conn.execute("SELECT COUNT(*) FROM memories")
+                count = cursor.fetchone()[0]
+                if count >= self.max_records:
+                    evict_cursor = conn.execute("SELECT memory_id FROM memories ORDER BY updated_at ASC LIMIT ?", (count - self.max_records + 1,))
+                    evicted_ids = [row[0] for row in evict_cursor.fetchall()]
+                    for eid in evicted_ids:
+                        conn.execute("DELETE FROM memories WHERE memory_id = ?", (eid,))
+                        try:
+                            conn.execute("DELETE FROM memories_fts WHERE memory_id = ?", (eid,))
+                        except Exception:
+                            pass
+
                 conn.execute(
-                    "INSERT INTO memories_fts(memory_id, text, tags) VALUES(?, ?, ?)",
-                    (record.memory_id, record.text, json.dumps(record.tags)),
+                    """
+                    INSERT INTO memories(memory_id, text, tags, metadata, updated_at)
+                    VALUES(?, ?, ?, ?, CURRENT_TIMESTAMP)
+                    ON CONFLICT(memory_id) DO UPDATE SET
+                        text=excluded.text,
+                        tags=excluded.tags,
+                        metadata=excluded.metadata,
+                        updated_at=CURRENT_TIMESTAMP
+                    """,
+                    (
+                        record.memory_id,
+                        record.text,
+                        json.dumps(record.tags),
+                        json.dumps(record.metadata),
+                    ),
                 )
-            except sqlite3.OperationalError:
-                pass
-            conn.commit()
+                try:
+                    conn.execute("DELETE FROM memories_fts WHERE memory_id = ?", (record.memory_id,))
+                    conn.execute(
+                        "INSERT INTO memories_fts(memory_id, text, tags) VALUES(?, ?, ?)",
+                        (record.memory_id, record.text, json.dumps(record.tags)),
+                    )
+                except sqlite3.OperationalError:
+                    pass
         finally:
             conn.close()
 
@@ -158,55 +176,64 @@ class SQLiteMemory:
         return conn
 
     def _init_db(self) -> None:
-        with self._connect() as conn:
-            conn.execute(
-                """
-                CREATE TABLE IF NOT EXISTS memories (
-                    memory_id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    agent_id TEXT NOT NULL,
-                    title TEXT NOT NULL,
-                    content TEXT NOT NULL,
-                    tags TEXT NOT NULL DEFAULT ''
-                )
-                """
-            )
-            try:
+        conn = self._connect()
+        try:
+            with conn:
                 conn.execute(
                     """
-                    CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts
-                    USING fts5(memory_id UNINDEXED, agent_id, title, content, tags)
+                    CREATE TABLE IF NOT EXISTS memories (
+                        memory_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        agent_id TEXT NOT NULL,
+                        title TEXT NOT NULL,
+                        content TEXT NOT NULL,
+                        tags TEXT NOT NULL DEFAULT ''
+                    )
                     """
                 )
-            except sqlite3.OperationalError:
-                pass
+                try:
+                    conn.execute(
+                        """
+                        CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts
+                        USING fts5(memory_id UNINDEXED, agent_id, title, content, tags)
+                        """
+                    )
+                except sqlite3.OperationalError:
+                    pass
+        finally:
+            conn.close()
 
     def store(self, agent_id: str, title: str, content: str, tags: str = "") -> int:
         """Store a memory entry."""
 
-        with self._connect() as conn:
-            cursor = conn.execute(
-                "INSERT INTO memories(agent_id, title, content, tags) VALUES(?, ?, ?, ?)",
-                (agent_id, title, content, tags),
-            )
-            memory_id = int(cursor.lastrowid)
-            try:
-                conn.execute(
-                    "DELETE FROM memories_fts WHERE memory_id = ?",
-                    (memory_id,),
+        conn = self._connect()
+        try:
+            with conn:
+                cursor = conn.execute(
+                    "INSERT INTO memories(agent_id, title, content, tags) VALUES(?, ?, ?, ?)",
+                    (agent_id, title, content, tags),
                 )
-                conn.execute(
-                    "INSERT INTO memories_fts(memory_id, agent_id, title, content, tags) VALUES(?, ?, ?, ?, ?)",
-                    (memory_id, agent_id, title, content, tags),
-                )
-            except sqlite3.OperationalError:
-                pass
-            conn.commit()
-            return memory_id
+                memory_id = int(cursor.lastrowid)
+                try:
+                    conn.execute(
+                        "DELETE FROM memories_fts WHERE memory_id = ?",
+                        (memory_id,),
+                    )
+                    conn.execute(
+                        "INSERT INTO memories_fts(memory_id, agent_id, title, content, tags) VALUES(?, ?, ?, ?, ?)",
+                        (memory_id, agent_id, title, content, tags),
+                    )
+                except sqlite3.OperationalError:
+                    pass
+                conn.commit()
+                return memory_id
+        finally:
+            conn.close()
 
     def recall(self, agent_id: str, query: str) -> list[dict[str, Any]]:
         """Recall memories for an agent using FTS5 search."""
 
-        with self._connect() as conn:
+        conn = self._connect()
+        try:
             try:
                 cursor = conn.execute(
                     """
@@ -232,6 +259,8 @@ class SQLiteMemory:
                     (agent_id, f"%{query}%", f"%{query}%", f"%{query}%"),
                 )
             rows = cursor.fetchall()
+        finally:
+            conn.close()
         return [
             {
                 "memory_id": int(row["memory_id"]),

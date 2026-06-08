@@ -14,6 +14,14 @@ def _utcnow() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+class ClosingConnection(sqlite3.Connection):
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        try:
+            super().__exit__(exc_type, exc_val, exc_tb)
+        finally:
+            self.close()
+
+
 @dataclass(slots=True)
 class TaskDatabase:
     """SQLite-backed workforce database."""
@@ -26,58 +34,62 @@ class TaskDatabase:
         self._init_db()
 
     def _connect(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(self.db_path)
+        conn = sqlite3.connect(self.db_path, factory=ClosingConnection)
         conn.row_factory = sqlite3.Row
         return conn
 
     def _init_db(self) -> None:
-        with self._connect() as conn:
-            conn.executescript(
-                """
-                CREATE TABLE IF NOT EXISTS tasks (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    command TEXT NOT NULL,
-                    subtask_instruction TEXT NOT NULL,
-                    assigned_agent TEXT,
-                    status TEXT NOT NULL DEFAULT 'pending',
-                    priority INTEGER NOT NULL DEFAULT 100,
-                    retry_count INTEGER NOT NULL DEFAULT 0,
-                    created_at TEXT NOT NULL,
-                    started_at TEXT,
-                    completed_at TEXT,
-                    result TEXT,
-                    error TEXT
-                );
-                CREATE TABLE IF NOT EXISTS agents (
-                    id TEXT PRIMARY KEY,
-                    container_id TEXT,
-                    status TEXT NOT NULL DEFAULT 'idle',
-                    current_task_id INTEGER,
-                    last_heartbeat TEXT,
-                    total_tasks_done INTEGER NOT NULL DEFAULT 0,
-                    total_errors INTEGER NOT NULL DEFAULT 0
-                );
-                CREATE TABLE IF NOT EXISTS results (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    task_id INTEGER NOT NULL,
-                    agent_id TEXT NOT NULL,
-                    output TEXT,
-                    files TEXT,
-                    screenshots TEXT,
-                    tokens_used INTEGER DEFAULT 0,
-                    cost REAL DEFAULT 0,
-                    timestamp TEXT NOT NULL
-                );
-                CREATE TABLE IF NOT EXISTS sessions (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    agent_id TEXT NOT NULL,
-                    site TEXT NOT NULL,
-                    cookies TEXT,
-                    localStorage TEXT,
-                    saved_at TEXT NOT NULL
-                );
-                """
-            )
+        conn = self._connect()
+        try:
+            with conn:
+                conn.executescript(
+                    """
+                    CREATE TABLE IF NOT EXISTS tasks (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        command TEXT NOT NULL,
+                        subtask_instruction TEXT NOT NULL,
+                        assigned_agent TEXT,
+                        status TEXT NOT NULL DEFAULT 'pending',
+                        priority INTEGER NOT NULL DEFAULT 100,
+                        retry_count INTEGER NOT NULL DEFAULT 0,
+                        created_at TEXT NOT NULL,
+                        started_at TEXT,
+                        completed_at TEXT,
+                        result TEXT,
+                        error TEXT
+                    );
+                    CREATE TABLE IF NOT EXISTS agents (
+                        id TEXT PRIMARY KEY,
+                        container_id TEXT,
+                        status TEXT NOT NULL DEFAULT 'idle',
+                        current_task_id INTEGER,
+                        last_heartbeat TEXT,
+                        total_tasks_done INTEGER NOT NULL DEFAULT 0,
+                        total_errors INTEGER NOT NULL DEFAULT 0
+                    );
+                    CREATE TABLE IF NOT EXISTS results (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        task_id INTEGER NOT NULL,
+                        agent_id TEXT NOT NULL,
+                        output TEXT,
+                        files TEXT,
+                        screenshots TEXT,
+                        tokens_used INTEGER DEFAULT 0,
+                        cost REAL DEFAULT 0,
+                        timestamp TEXT NOT NULL
+                    );
+                    CREATE TABLE IF NOT EXISTS sessions (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        agent_id TEXT NOT NULL,
+                        site TEXT NOT NULL,
+                        cookies TEXT,
+                        localStorage TEXT,
+                        saved_at TEXT NOT NULL
+                    );
+                    """
+                )
+        finally:
+            conn.close()
 
     async def init(self) -> None:
         """Compatibility async initializer used by verification scripts."""

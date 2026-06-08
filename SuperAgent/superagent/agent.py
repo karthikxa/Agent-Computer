@@ -22,6 +22,8 @@ from .session import SessionManager
 from .stream import StreamConfig, StreamManager
 from .verification import HumanVerificationHandler
 from .escalation import EscalationManager
+from .security import SecurityManager, SecurityConfig
+from .dashboard_api import DashboardAPIServer
 
 
 @dataclass
@@ -86,6 +88,8 @@ class SuperAgent:
             imap_user=config.imap_user,
             imap_app_password=config.imap_app_password,
         )
+        self.security_manager = SecurityManager()
+        self.dashboard_api = DashboardAPIServer(agent=self)
         self.runtime = AgentRuntime(
             config=config,
             desktop_api=self.desktop_api,
@@ -105,6 +109,7 @@ class SuperAgent:
         """Start auxiliary systems."""
 
         await self.stream.start()
+        await self.dashboard_api.start()
         if self.config.enable_monitor:
             await self.monitor.start()
 
@@ -113,6 +118,7 @@ class SuperAgent:
 
         if self.config.enable_monitor:
             await self.monitor.stop()
+        await self.dashboard_api.stop()
         await self.stream.stop()
         await self.desktop_api.close()
 

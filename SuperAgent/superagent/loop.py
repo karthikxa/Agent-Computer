@@ -26,6 +26,7 @@ class LoopState:
     observations: list[str] = field(default_factory=list)
     instructions: list[str] = field(default_factory=list)
     history: list[dict[str, Any]] = field(default_factory=list)
+    trajectory: list[dict[str, Any]] = field(default_factory=list)
 
 
 class AgentLoop:
@@ -65,6 +66,20 @@ class AgentLoop:
             if isinstance(result, StopAction):
                 self.state.done = True
                 break
+        
+        # Save trajectory log
+        try:
+            import json
+            import time
+            from pathlib import Path
+            log_dir = Path(".superagent/trajectories")
+            log_dir.mkdir(parents=True, exist_ok=True)
+            log_file = log_dir / f"trajectory_{int(time.time())}.json"
+            with open(log_file, "w", encoding="utf-8") as f:
+                json.dump(self.state.trajectory, f, default=str, indent=2)
+        except Exception:
+            pass
+
         return executed
 
     async def step(self) -> Action:
@@ -115,6 +130,18 @@ class AgentLoop:
                 pass  # best effort recovery
 
         self.state.step_count += 1
+
+        # Record trajectory entry
+        try:
+            import time
+            self.state.trajectory.append({
+                "step": self.state.step_count,
+                "screenshot_hash": screenshot_hash,
+                "action": str(action),
+                "timestamp": time.time()
+            })
+        except Exception:
+            pass
 
         # Judge completion after every step
         try:

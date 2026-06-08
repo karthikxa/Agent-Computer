@@ -19,7 +19,7 @@ from .actions import (
     TextAction,
     WaitAction,
 )
-from .config import AgentConfig
+from .config import AgentConfig, AdvancedConfig
 from .cost_tracker import CostTracker, DEFAULT_PRICE_TABLE
 from .desktop_api import DesktopAPI, DesktopConnectionError
 from .grounding import CoordinateGrounding, GroundingModel, OSAtlasGrounding
@@ -48,8 +48,18 @@ from .providers import (
 from .queue import PriorityTaskQueue
 from .scheduler import TaskScheduler
 from .session import SessionManager
-from .stream import StreamManager
+from .stream import StreamManager, StreamConfig
 from .verification import HumanVerificationHandler
+
+# Advanced Features
+from .mcp_server import MCPServer, MCPTool
+from .kernel_scheduler import LLMKernel, KernelRequest, get_kernel
+from .semantic_fs import SemanticFileSystem, SFSFile
+from .hitl import HITLServer
+from .virtual_input import VirtualInputDriver
+from .security import SecurityManager, SecurityConfig, PermissionProfile
+from .benchmark import BenchmarkRunner, BenchmarkTask
+from .dashboard_api import DashboardAPIServer
 
 DesktopAPIClient = DesktopAPI
 
@@ -58,6 +68,7 @@ __all__ = [
     "ActionExecutor",
     "ActionParser",
     "AgentConfig",
+    "AdvancedConfig",
     "AgentMemory",
     "AgentPool",
     "AgentLoop",
@@ -94,6 +105,7 @@ __all__ = [
     "ShellAction",
     "StopAction",
     "StreamManager",
+    "StreamConfig",
     "SuperAgent",
     "TaskScheduler",
     "TextAction",
@@ -101,4 +113,19 @@ __all__ = [
     "WatchdogManager",
     "SQLiteMemory",
     "DEFAULT_PRICE_TABLE",
+    "MCPServer",
+    "MCPTool",
+    "LLMKernel",
+    "KernelRequest",
+    "get_kernel",
+    "SemanticFileSystem",
+    "SFSFile",
+    "HITLServer",
+    "VirtualInputDriver",
+    "SecurityManager",
+    "SecurityConfig",
+    "PermissionProfile",
+    "BenchmarkRunner",
+    "BenchmarkTask",
+    "DashboardAPIServer",
 ]

@@ -66,3 +66,54 @@ class AgentConfig:
         """Return the persistent data directory as an absolute path."""
 
         return self.data_dir.expanduser().resolve()
+
+
+# ---------------------------------------------------------------------------
+# New feature config extensions (added via separate dataclass to avoid
+# breaking existing AgentConfig instantiations with positional args)
+# ---------------------------------------------------------------------------
+
+
+@dataclass(slots=True)
+class AdvancedConfig:
+    """Optional advanced-feature configuration block.
+
+    Attach to ``AgentConfig.advanced`` or use standalone.
+    """
+
+    # --- MCP Server (F1) ---
+    enable_mcp: bool = False
+    mcp_host: str = "127.0.0.1"
+    mcp_port: int = 8765          # TCP port for MCP JSON-RPC server
+
+    # --- HITL HTTP Server (F4) ---
+    enable_hitl: bool = False
+    hitl_host: str = "127.0.0.1"
+    hitl_port: int = 9000         # HTTP port for human-in-the-loop API
+
+    # --- Semantic File System (F3) ---
+    enable_semantic_fs: bool = False
+    sfs_db_path: Path = Path(".superagent/sfs.db")
+
+    # --- Virtual Input Driver (F5) ---
+    enable_virtual_input: bool = False
+    virtual_input_display: str = ":1"     # X11 display for Linux
+    virtual_input_fallback: bool = True   # allow pyautogui fallback
+
+    # --- MicroVM / Sandbox Backend (F6) ---
+    sandbox_backend: str = "docker"       # "docker" | "firecracker" | "process"
+    firecracker_kernel: str = "/var/lib/firecracker/vmlinux"
+    firecracker_rootfs: str = "/var/lib/firecracker/rootfs.ext4"
+
+    # --- WebP Stream Compression (F7) ---
+    enable_webp_stream: bool = False
+    webp_port: int = 7081
+    webp_quality: int = 80
+    webp_fps: int = 10
+
+    # --- Kernel LLM Scheduler (F2) ---
+    enable_kernel_scheduler: bool = False
+    kernel_rpm: int = 60           # requests per minute
+    kernel_tpm: int = 100_000      # tokens per minute
+    kernel_max_concurrent: int = 4
+

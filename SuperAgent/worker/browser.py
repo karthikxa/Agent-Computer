@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from io import BytesIO
 from pathlib import Path
 from typing import Any
@@ -19,6 +19,7 @@ class BrowserWorker:
     """Automate a Chromium browser on the KasmVNC desktop."""
 
     vision_provider: OSAtlasProvider | None = None
+    downloads: list[dict[str, Any]] = field(default_factory=list)
     _playwright: Any | None = None
     _browser: Any | None = None
     _context: Any | None = None
@@ -34,7 +35,29 @@ class BrowserWorker:
         self._playwright = await async_playwright().start()
         self._browser = await self._playwright.chromium.launch(headless=False)
         self._context = await self._browser.new_context(viewport={"width": 1920, "height": 1080})
+        self._context.on("download", lambda download: self._track_download(download))
         self._page = await self._context.new_page()
+
+    def _track_download(self, download: Any) -> None:
+        self.downloads.append({
+            "url": download.url,
+            "suggested_filename": download.suggested_filename,
+            "path": None,
+            "status": "started"
+        })
+        asyncio.create_task(self._wait_for_download(download))
+
+    async def _wait_for_download(self, download: Any) -> None:
+        try:
+            path = await download.path()
+            for dl in self.downloads:
+                if dl["url"] == download.url:
+                    dl["path"] = str(path)
+                    dl["status"] = "completed"
+        except Exception as e:
+            for dl in self.downloads:
+                if dl["url"] == download.url:
+                    dl["status"] = f"failed: {e}"
 
     async def open(self, url: str) -> None:
         """Open a URL in a headed Chromium window."""
@@ -135,6 +158,41 @@ class BrowserWorker:
 
         await self._ensure()
         return await self._page.screenshot(type="png", full_page=True)
+
+    async def new_tab(self, url: str | None = None) -> int:
+        """Open a new tab and return its index."""
+        await self._ensure()
+        page = await self._context.new_page()
+        if url:
+            await page.goto(url, wait_until="networkidle")
+        self._page = page
+        return len(self._context.pages) - 1
+
+    async def switch_tab(self, index: int) -> None:
+        """Switch active tab to index."""
+        await self._ensure()
+        pages = self._context.pages
+        if 0 <= index < len(pages):
+            self._page = pages[index]
+        else:
+            raise IndexError("Tab index out of range")
+
+    async def close_tab(self, index: int) -> None:
+        """Close tab at index."""
+        await self._ensure()
+        pages = self._context.pages
+        if 0 <= index < len(pages):
+            await pages[index].close()
+            if self._page not in self._context.pages:
+                self._page = self._context.pages[-1] if self._context.pages else None
+
+    async def upload_file(self, element_description: str, file_path: str) -> None:
+        """Locate file input and upload file."""
+        await self._ensure()
+        try:
+            await self._page.get_by_label(element_description, exact=False).set_input_files(file_path)
+        except Exception:
+            await self._page.locator("input[type=file]").first.set_input_files(file_path)
 
     async def close(self) -> None:
         """Close browser resources."""
