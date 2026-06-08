@@ -223,48 +223,54 @@ LOG_PATH=./logs
 
 ## Project Structure
 SuperAgent/
-├── hermes/                     # Orchestrator
-│   ├── orchestrator.py         # Hermes brain — decompose, assign, aggregate
-│   └── main.py             # HTTP entrypoint on port 9000
-├── infrastructure/             # Container and data layer
-│   ├── container_manager.py    # Docker SDK — spawn, kill, health check
-│   ├── task_db.py              # SQLite task, agent, result tracking
-│   ├── shared_storage.py       # Shared volume read/write between agents
-│   └── logging.py              # Centralized logging setup
-├── worker/                     # Agent capabilities
-│   ├── browser.py              # Playwright browser automation
-│   └── auth.py                 # Login, 2FA, OAuth, session management
-├── superagent/                 # Core agent runtime
-│   ├── agent.py                # SuperAgent — wires all components
-│   ├── config.py               # AgentConfig dataclass
-│   ├── loop.py                 # Agent loop with stuck detection
-│   ├── actions.py              # Action models and executor
-│   ├── providers.py            # All LLM provider classes
-│   ├── desktop_api.py          # HTTP client for desktop control
-│   ├── stream.py               # KasmVNC and HLS stream manager
-│   ├── memory.py               # SQLite memory with FTS5
-│   ├── cost_tracker.py         # Token and cost tracking
-│   ├── queue.py                # Priority task queue
-│   ├── session.py              # Session persistence
-│   ├── monitor.py              # Watchdog and heartbeat
-│   ├── escalation.py           # Human escalation webhook
-│   ├── ocr.py                  # Tesseract and EasyOCR layer
-│   ├── grounding.py            # Visual coordinate grounding
-│   ├── scheduler.py            # Task scheduler
-│   └── verification.py         # Human verification helpers
-├── container/                  # What runs inside each agent container
-│   ├── desktop_server.py       # Flask REST API for all desktop actions
-│   └── start.sh                # Starts KasmVNC, Flask API, HLS stream
+│
+├── hermes/                         # Hermes orchestrator — the brain
+│   ├── orchestrator.py             # Decomposes goals, assigns tasks, aggregates results
+│   └── __main__.py                 # HTTP API server on port 9000
+│
+├── infrastructure/                 # Shared backbone for all agents
+│   ├── container_manager.py        # Spawns and kills Docker containers via Docker SDK
+│   ├── task_db.py                  # SQLite — tracks every task, agent, and result
+│   ├── shared_storage.py           # Shared volume — agents read and write results here
+│   └── logging.py                  # Centralized logging for the whole system
+│
+├── worker/                         # What each agent can do
+│   ├── browser.py                  # Playwright — browse, click, fill forms, download
+│   └── auth.py                     # Login, TOTP, email OTP, SMS OTP, OAuth, sessions
+│
+├── superagent/                     # Core agent runtime
+│   ├── agent.py                    # SuperAgent class — wires everything together
+│   ├── config.py                   # AgentConfig — all settings in one dataclass
+│   ├── loop.py                     # Main agent loop — screenshot, act, check, repeat
+│   ├── actions.py                  # Action types, parser, and executor
+│   ├── providers.py                # All LLM providers — Anthropic, OpenAI, Ollama, etc
+│   ├── desktop_api.py              # HTTP client — talks to desktop_server inside container
+│   ├── stream.py                   # KasmVNC detector and FFmpeg HLS fallback
+│   ├── memory.py                   # SQLite memory with FTS5 full text search
+│   ├── cost_tracker.py             # Tracks tokens used and cost per agent per task
+│   ├── queue.py                    # Priority task queue
+│   ├── session.py                  # Saves and loads agent session state to disk
+│   ├── monitor.py                  # Watchdog — detects stuck or crashed agents
+│   ├── escalation.py               # Sends webhook when agent needs human help
+│   ├── ocr.py                      # Reads text from screenshots via Tesseract or EasyOCR
+│   ├── grounding.py                # Finds coordinates of UI elements on screen
+│   ├── scheduler.py                # Schedules recurring or delayed tasks
+│   └── verification.py             # Handles human verification steps in agent tasks
+│
+├── container/                      # Runs inside every agent Docker container
+│   ├── desktop_server.py           # Flask REST API — screenshot, click, type, browser, files
+│   └── start.sh                    # Startup script — launches KasmVNC, Flask API, HLS stream
+│
 ├── tests/
-│   ├── test_production.py      # Full workforce integration tests
-│   └── test_live.py            # Single agent live tests
-├── Dockerfile                  # Agent container image
-├── Dockerfile.hermes           # Hermes orchestrator image
-├── docker-compose.yml          # Full stack deployment
-├── nginx.conf                  # Reverse proxy routing
-├── requirements.txt            # Python dependencies
-└── .env.example                # All environment variables
-
+│   ├── test_production.py          # Full 250-agent workforce integration tests
+│   └── test_live.py                # Single agent live container tests
+│
+├── Dockerfile                      # Builds the agent container image
+├── Dockerfile.hermes               # Builds the Hermes orchestrator image
+├── docker-compose.yml              # Runs the full stack — Hermes, nginx, shared storage
+├── nginx.conf                      # Routes /agent/{id}/vnc desktop and stream per agent
+├── requirements.txt                # All Python dependencies
+└── .env.example                    # Every environment variable with descriptions
 ---
 
 ## How It Works
