@@ -1,0 +1,36 @@
+# Per-agent stream config — Feature #33
+# Copy and rename per agent: agent-1.yaml, agent-2.yaml, etc.
+# Load with: StreamConfig.from_yaml("configs/stream/agent-1.yaml", agent_id="agent-1")
+
+agent_id: "agent-1"
+display: ":1"
+
+# Resolution targets
+resolution_4k: "3840x2160"
+resolution_1080p: "1920x1080"
+
+# Feature #27 — 60 FPS streaming
+webp_fps: 60
+webp_quality: 85
+
+# Feature #31 — HiDPI / Retina scale
+high_dpi_scale: 1.0   # set 2.0 for 4K displays
+
+# Feature #29 — WebRTC peer signaling
+enable_webrtc: true
+
+# QOI lossless codec
+enable_qoi: true
+
+# Feature #41 — TLS / HTTPS
+enable_https: false   # set true + configure reverse proxy for production
+
+# Ports (base port + agent_id offset applied automatically in StreamManager)
+webp_port: 7081
+webrtc_port: 7082
+qoi_port: 7083
+hls_port: 7080
+vnc_port: 6901
+
+# Stream directory for HLS segments
+stream_dir: "/tmp/agent-1-stream"

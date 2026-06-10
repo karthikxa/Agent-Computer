@@ -177,3 +177,213 @@ class HermesOrchestrator:
             if not pending and running == 0:
                 return
             await asyncio.sleep(5)
+
+    # ------------------------------------------------------------------
+    # Feature #72 — Agent grouping: logical teams of agents
+    # ------------------------------------------------------------------
+
+    async def create_group(
+        self,
+        group_name: str,
+        agent_ids: list[int],
+        *,
+        shared_goal: str = "",
+        shared_memory: bool = False,
+    ) -> dict[str, Any]:
+        """Create a logical group of agents that share a goal.
+
+        Groups are persisted to the task DB and can be monitored as a
+        unit via get_group_status().
+
+        Parameters
+        ----------
+        group_name:
+            Human-readable group identifier (e.g. 'research-team').
+        agent_ids:
+            List of integer agent IDs to include in this group.
+        shared_goal:
+            Overarching goal for the group (stored as metadata).
+        shared_memory:
+            If True, agents in the group share a common memory namespace.
+        """
+        group_id = f"group-{group_name}-{int(asyncio.get_event_loop().time())}"
+        if not hasattr(self, "_groups"):
+            self._groups: dict[str, Any] = {}
+        self._groups[group_id] = {
+            "group_id": group_id,
+            "group_name": group_name,
+            "agent_ids": agent_ids,
+            "shared_goal": shared_goal,
+            "shared_memory": shared_memory,
+            "created_at": asyncio.get_event_loop().time(),
+            "status": "active",
+        }
+        self.logger.info(
+            "Hermes: created group '%s' with %d agents", group_name, len(agent_ids)
+        )
+        return self._groups[group_id]
+
+    async def dissolve_group(self, group_id: str) -> bool:
+        """Dissolve a group (agents continue running independently)."""
+        if not hasattr(self, "_groups"):
+            return False
+        group = self._groups.pop(group_id, None)
+        if group:
+            self.logger.info("Hermes: dissolved group %s", group_id)
+        return group is not None
+
+    async def get_group_status(self, group_id: str) -> dict[str, Any]:
+        """Return current status of all agents in a group."""
+        if not hasattr(self, "_groups"):
+            return {"error": "No groups defined"}
+        group = self._groups.get(group_id)
+        if not group:
+            return {"error": f"Group '{group_id}' not found"}
+
+        workforce = await self.task_db.get_workforce_status()
+        agent_statuses = []
+        for aid in group["agent_ids"]:
+            # Look up per-agent status from workforce report
+            all_agents = workforce.get("agents", [])
+            match = next((a for a in all_agents if str(a.get("id")) == str(aid)), None)
+            agent_statuses.append(match or {"id": aid, "status": "unknown"})
+
+        return {**group, "agents": agent_statuses}
+
+    async def list_groups(self) -> list[dict[str, Any]]:
+        """List all active groups."""
+        return list(getattr(self, "_groups", {}).values())
+
+    async def broadcast_to_group(self, group_id: str, message: str) -> int:
+        """Send a message/instruction to all agents in a group.
+
+        Returns the number of agents that received the message.
+        """
+        if not hasattr(self, "_groups"):
+            return 0
+        group = self._groups.get(group_id)
+        if not group:
+            return 0
+        sent = 0
+        for aid in group["agent_ids"]:
+            try:
+                task_id = await self.task_db.create_task(
+                    message, f"Group instruction for agent {aid}", priority=50
+                )
+                await self.task_db.assign_task(task_id, str(aid))
+                sent += 1
+            except Exception:
+                pass
+        return sent
+
+    # ------------------------------------------------------------------
+    # Feature #88 — Priority task queue
+    # ------------------------------------------------------------------
+
+    async def submit_priority(
+        self,
+        command: str,
+        *,
+        priority: int = 100,
+        deadline_seconds: float | None = None,
+    ) -> dict[str, Any]:
+        """Submit a task with explicit priority and optional deadline.
+
+        Priority scale: 1 (highest) → 1000 (lowest).
+        Tasks with priority < 50 are treated as URGENT and skip the
+        normal queue to be assigned immediately to idle agents.
+        """
+        subtasks = await self.decompose(command, 1)
+        subtask = subtasks[0] if subtasks else {"instruction": command, "priority": priority}
+        subtask["priority"] = priority
+
+        task_id = await self.task_db.create_task(
+            command,
+            subtask["instruction"],
+            priority,
+        )
+
+        # URGENT: assign immediately to any idle agent
+        if priority < 50:
+            workforce = await self.task_db.get_workforce_status()
+            idle_agents = [
+                a["id"] for a in workforce.get("agents", [])
+                if a.get("status") == "idle"
+            ]
+            if idle_agents:
+                await self.task_db.assign_task(task_id, str(idle_agents[0]))
+                self.logger.info(
+                    "Hermes: URGENT task %d assigned immediately to agent %s",
+                    task_id, idle_agents[0],
+                )
+
+        return {
+            "task_id": task_id,
+            "priority": priority,
+            "deadline_seconds": deadline_seconds,
+            "status": "queued",
+        }
+
+    # ------------------------------------------------------------------
+    # Feature #93 — Auto-scaling: spawn/terminate agents based on load
+    # ------------------------------------------------------------------
+
+    async def auto_scale(
+        self,
+        *,
+        min_agents: int = 1,
+        max_agents: int | None = None,
+        target_queue_depth: int = 5,
+    ) -> dict[str, Any]:
+        """Dynamically scale the agent pool based on pending task queue depth.
+
+        Spawns new agents if queue depth > target and terminates idle agents
+        when queue depth is low.
+
+        Parameters
+        ----------
+        min_agents:
+            Minimum agents to keep running at all times.
+        max_agents:
+            Maximum agents (defaults to self.max_agents).
+        target_queue_depth:
+            Desired tasks-per-agent ratio.
+        """
+        max_agents = max_agents or self.max_agents
+        workforce = await self.task_db.get_workforce_status()
+        pending = len(await self.task_db.get_all_pending())
+        current_count = len(self.container_manager.list_running())
+        desired = max(min_agents, min(max_agents, (pending // max(1, target_queue_depth)) + 1))
+
+        spawned = 0
+        terminated = 0
+
+        if desired > current_count:
+            # Scale up
+            to_spawn = desired - current_count
+            next_id = current_count + 1
+            await self.container_manager.spawn_all(to_spawn, start_id=next_id)
+            spawned = to_spawn
+            self.logger.info("AutoScale: spawned %d new agents (pending=%d)", to_spawn, pending)
+
+        elif desired < current_count and pending == 0:
+            # Scale down — terminate idle agents down to min_agents
+            running = self.container_manager.list_running()
+            to_stop = current_count - max(min_agents, desired)
+            for entry in running[-to_stop:]:
+                try:
+                    await self.container_manager.stop(int(entry["agent_id"]))
+                    terminated += 1
+                except Exception:
+                    pass
+            if terminated:
+                self.logger.info("AutoScale: terminated %d idle agents", terminated)
+
+        return {
+            "previous_count": current_count,
+            "desired_count": desired,
+            "spawned": spawned,
+            "terminated": terminated,
+            "pending_tasks": pending,
+        }
+

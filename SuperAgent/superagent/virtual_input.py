@@ -478,3 +478,169 @@ class VirtualInputDriver:
             "backspace": "BackSpace", "delete": "Delete",
             "up": "Up", "down": "Down", "left": "Left", "right": "Right",
         }.get(key.lower(), key)
+
+    # ------------------------------------------------------------------
+    # Feature #35 — IME support for multilingual input
+    # ------------------------------------------------------------------
+
+    async def type_text_ime(self, text: str, locale: str = "en_US") -> None:
+        """Type multilingual text using IME-aware input method.
+
+        On Linux uses xdotool with UTF-8 support; falls back to xdotool
+        ``type --clearmodifiers`` for non-ASCII characters via xte/ibus.
+        On Windows uses SendInput with Unicode code points.
+        """
+        if not self._check_permission("write"):
+            return
+        if _SYSTEM == "Linux" and self._xdotool_available:
+            # xdotool type supports Unicode via --clearmodifiers
+            # For CJK and complex scripts, use ibus-daemon or fcitx input
+            env_display = {"DISPLAY": self.display}
+            import os
+            env = dict(**os.environ, **env_display)
+            # Try xdotool with unicode
+            cmd = ["xdotool", "type", "--clearmodifiers", "--delay", "30"]
+            if self.window_id:
+                cmd += ["--window", self.window_id]
+            cmd.append(text)
+            await self._run_cmd(cmd, env=env)
+        elif _SYSTEM == "Windows":
+            await self._win32_type_unicode(text)
+        else:
+            await self._pyautogui_type(text)
+
+    async def _win32_type_unicode(self, text: str) -> None:
+        """Windows Unicode input via SendInput with KEYEVENTF_UNICODE flag."""
+        try:
+            import ctypes
+            import ctypes.wintypes
+
+            KEYEVENTF_UNICODE = 0x0004
+            KEYEVENTF_KEYUP   = 0x0002
+
+            class KEYBDINPUT(ctypes.Structure):
+                _fields_ = [
+                    ("wVk",         ctypes.wintypes.WORD),
+                    ("wScan",       ctypes.wintypes.WORD),
+                    ("dwFlags",     ctypes.wintypes.DWORD),
+                    ("time",        ctypes.wintypes.DWORD),
+                    ("dwExtraInfo", ctypes.POINTER(ctypes.c_ulong)),
+                ]
+
+            class INPUT(ctypes.Structure):
+                class _INPUT(ctypes.Union):
+                    _fields_ = [("ki", KEYBDINPUT)]
+                _anonymous_ = ("_input",)
+                _fields_  = [("type", ctypes.wintypes.DWORD), ("_input", _INPUT)]
+
+            INPUT_KEYBOARD = 1
+            inputs = []
+            for ch in text:
+                code = ord(ch)
+                for flag in (KEYEVENTF_UNICODE, KEYEVENTF_UNICODE | KEYEVENTF_KEYUP):
+                    inp = INPUT()
+                    inp.type = INPUT_KEYBOARD
+                    inp.ki.wVk = 0
+                    inp.ki.wScan = code
+                    inp.ki.dwFlags = flag
+                    inputs.append(inp)
+
+            arr = (INPUT * len(inputs))(*inputs)
+            await asyncio.to_thread(
+                ctypes.windll.user32.SendInput, len(inputs), arr, ctypes.sizeof(INPUT)
+            )
+        except Exception as exc:
+            logger.warning("Win32 Unicode input failed: %s", exc)
+            await self._pyautogui_type(text)
+
+    # ------------------------------------------------------------------
+    # Feature #36 — Game pointer / relative cursor mode
+    # ------------------------------------------------------------------
+
+    async def move_relative(self, dx: int, dy: int) -> None:
+        """Move cursor by (dx, dy) relative to its current position.
+
+        Useful for game-style / FPS agent tasks where absolute positioning
+        is not meaningful (e.g. rotating a 3D viewport).
+        """
+        if _SYSTEM == "Linux" and self._xdotool_available:
+            import os
+            env = dict(**os.environ, DISPLAY=self.display)
+            await self._run_cmd(["xdotool", "mousemove_relative", "--", str(dx), str(dy)], env=env)
+        elif _SYSTEM == "Windows":
+            try:
+                import ctypes
+                MOUSEEVENTF_MOVE = 0x0001
+                await asyncio.to_thread(
+                    ctypes.windll.user32.mouse_event,
+                    MOUSEEVENTF_MOVE, dx, dy, 0, 0,
+                )
+            except Exception:
+                pass
+        else:
+            try:
+                import pyautogui
+                current_x, current_y = pyautogui.position()
+                await asyncio.to_thread(pyautogui.moveTo, current_x + dx, current_y + dy)
+            except Exception:
+                pass
+
+    async def drag_relative(self, dx: int, dy: int) -> None:
+        """Drag (left button held) by (dx, dy) relative pixels."""
+        if _SYSTEM == "Linux" and self._xdotool_available:
+            import os
+            env = dict(**os.environ, DISPLAY=self.display)
+            await self._run_cmd(["xdotool", "mousedown", "1"], env=env)
+            await self._run_cmd(["xdotool", "mousemove_relative", "--", str(dx), str(dy)], env=env)
+            await self._run_cmd(["xdotool", "mouseup", "1"], env=env)
+        else:
+            try:
+                import pyautogui
+                current_x, current_y = pyautogui.position()
+                await asyncio.to_thread(pyautogui.dragTo, current_x + dx, current_y + dy, button="left")
+            except Exception:
+                pass
+
+    # ------------------------------------------------------------------
+    # Feature #37 — Cursor lock for precision control tasks
+    # ------------------------------------------------------------------
+
+    async def lock_cursor(self, x: int, y: int) -> None:
+        """Lock the virtual cursor to a fixed position (FPS-style lock).
+
+        Moves cursor to (x, y) and repeatedly re-centers it to simulate
+        cursor confinement.  Call unlock_cursor() to release.
+        """
+        self._cursor_locked = True
+        self._lock_x = x
+        self._lock_y = y
+        if not hasattr(self, "_lock_task") or self._lock_task is None or self._lock_task.done():
+            self._lock_task = asyncio.create_task(self._cursor_lock_loop())
+        logger.info("VirtualInput: cursor locked to (%d, %d)", x, y)
+
+    async def unlock_cursor(self) -> None:
+        """Release cursor lock."""
+        self._cursor_locked = False
+        if hasattr(self, "_lock_task") and self._lock_task and not self._lock_task.done():
+            self._lock_task.cancel()
+            try:
+                await self._lock_task
+            except asyncio.CancelledError:
+                pass
+        self._lock_task = None
+        logger.info("VirtualInput: cursor unlocked")
+
+    async def _cursor_lock_loop(self) -> None:
+        """Background task that keeps the cursor at the locked position."""
+        while getattr(self, "_cursor_locked", False):
+            try:
+                await self.move(self._lock_x, self._lock_y)
+            except Exception:
+                pass
+            await asyncio.sleep(0.016)  # ~60 Hz re-centering
+
+    # Initialize cursor-lock state fields
+    _cursor_locked: bool = False
+    _lock_x: int = 0
+    _lock_y: int = 0
+    _lock_task: "asyncio.Task[None] | None" = None

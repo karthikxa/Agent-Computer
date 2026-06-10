@@ -1,19 +1,73 @@
+# ── Core web / async ──────────────────────────────────────────────────────────
 pydantic>=2.7.0
 aiohttp>=3.9.0
 Flask>=3.0.0
+
+# ── Image / vision ────────────────────────────────────────────────────────────
 Pillow>=11.0.0
-python-dotenv>=1.0.1
-apscheduler>=3.10.4
+numpy>=1.24.3
+
+# ── OCR ───────────────────────────────────────────────────────────────────────
 pytesseract>=0.3.13
 easyocr>=1.7.1
+
+# ── Browser automation ────────────────────────────────────────────────────────
 playwright>=1.46.0
+
+# ── Desktop input ─────────────────────────────────────────────────────────────
+pyautogui>=0.9.54
+
+# ── Auth / OTP ────────────────────────────────────────────────────────────────
 pyotp>=2.9.0
+
+# ── Container management ──────────────────────────────────────────────────────
 docker>=7.1.0
+
+# ── Database / persistence ────────────────────────────────────────────────────
 sqlalchemy>=2.0.0
 aiosqlite>=0.20.0
+
+# ── LLM providers ────────────────────────────────────────────────────────────
 together>=1.2.0
 openai>=1.30.0
 anthropic>=0.34.0
-pyautogui>=0.9.54
-numpy>=1.24.3
+
+# ── Scheduling ────────────────────────────────────────────────────────────────
+apscheduler>=3.10.4
+python-dotenv>=1.0.1
+
+# ── Testing ───────────────────────────────────────────────────────────────────
 pytest>=8.0.0
+pytest-asyncio>=0.23.0
+
+# ── New features (Phase 1-4) ──────────────────────────────────────────────────
+
+# Feature #77 — Encrypted credential vault
+cryptography>=42.0.0
+
+# Feature #80 / #86 — Cost tracking & alerting (psutil for system metrics)
+psutil>=5.9.0
+
+# Feature #33 — YAML per-agent desktop config
+PyYAML>=6.0.1
+
+# Feature #76 — Clipboard access for syscall dispatcher
+pyperclip>=1.8.2
+
+# Feature #67 / #29 — WebRTC peer connections (optional, aiortc backend)
+# aiortc>=1.9.0   # uncomment if you want native WebRTC media (requires libav)
+
+# Feature #66 — Syntax-aware shell script execution
+# No extra deps needed — uses asyncio.create_subprocess_shell
+
+# Feature #95 — Multi-GPU container scheduling
+# nvidia-ml-py>=12.0.0   # uncomment if nvidia-smi is not available on PATH
+
+# Feature #41 — TLS/HTTPS support for stream endpoints
+# aiohttp[speedups]>=3.9.0  # already included above
+
+# Feature #97 — Kubernetes deployment manifests (no Python dep, uses kubectl)
+
+# Extras recommended for production:
+# uvloop>=0.19.0           # faster asyncio event loop (Linux/macOS)
+# orjson>=3.9.0            # faster JSON serialisation

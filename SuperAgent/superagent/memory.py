@@ -161,6 +161,139 @@ class AgentMemory:
 
         return None
 
+    # ------------------------------------------------------------------
+    # Feature #60 — Context switch: save/restore memory state per task
+    # ------------------------------------------------------------------
+
+    async def save_context(self, context_name: str) -> bool:
+        """Snapshot the current memory state to a named context slot.
+
+        Allows an agent to switch tasks without memory contamination.
+        The snapshot is stored as a JSON blob in a ``context_snapshots``
+        table inside the same SQLite database.
+
+        Parameters
+        ----------
+        context_name:
+            Arbitrary label for this snapshot (e.g. task ID or agent-task pair).
+        """
+        def _save() -> bool:
+            conn = self._connect()
+            try:
+                with conn:
+                    # Ensure snapshot table exists
+                    conn.execute("""
+                        CREATE TABLE IF NOT EXISTS context_snapshots (
+                            name       TEXT PRIMARY KEY,
+                            snapshot   TEXT NOT NULL,
+                            saved_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                        )
+                    """)
+                    # Dump all current memories to JSON
+                    rows = conn.execute(
+                        "SELECT memory_id, text, tags, metadata FROM memories"
+                    ).fetchall()
+                    snapshot = [
+                        {
+                            "memory_id": r[0],
+                            "text": r[1],
+                            "tags": r[2],
+                            "metadata": r[3],
+                        }
+                        for r in rows
+                    ]
+                    import json as _json
+                    conn.execute(
+                        "INSERT OR REPLACE INTO context_snapshots (name, snapshot) VALUES (?, ?)",
+                        (context_name, _json.dumps(snapshot)),
+                    )
+                return True
+            finally:
+                conn.close()
+
+        return await asyncio.to_thread(_save)
+
+    async def restore_context(self, context_name: str, *, clear_current: bool = True) -> int:
+        """Restore a previously saved context snapshot.
+
+        Parameters
+        ----------
+        context_name:
+            The name passed to save_context().
+        clear_current:
+            If True, clears all current memories before restoring
+            (full context switch). If False, merges snapshot on top.
+
+        Returns
+        -------
+        int
+            Number of memory records restored.
+        """
+        def _restore() -> int:
+            import json as _json
+            conn = self._connect()
+            try:
+                row = conn.execute(
+                    "SELECT snapshot FROM context_snapshots WHERE name=?",
+                    (context_name,),
+                ).fetchone()
+                if not row:
+                    return 0
+                records = _json.loads(row[0])
+                with conn:
+                    if clear_current:
+                        conn.execute("DELETE FROM memories")
+                        try:
+                            conn.execute("DELETE FROM memories_fts")
+                        except Exception:
+                            pass
+                    for rec in records:
+                        conn.execute(
+                            """INSERT INTO memories(memory_id, text, tags, metadata, updated_at)
+                               VALUES(?, ?, ?, ?, CURRENT_TIMESTAMP)
+                               ON CONFLICT(memory_id) DO UPDATE SET
+                               text=excluded.text, tags=excluded.tags,
+                               metadata=excluded.metadata, updated_at=CURRENT_TIMESTAMP""",
+                            (rec["memory_id"], rec["text"], rec["tags"], rec["metadata"]),
+                        )
+                return len(records)
+            finally:
+                conn.close()
+
+        return await asyncio.to_thread(_restore)
+
+    async def list_contexts(self) -> list[str]:
+        """List all saved context snapshot names."""
+        def _list() -> list[str]:
+            conn = self._connect()
+            try:
+                rows = conn.execute(
+                    "SELECT name FROM context_snapshots ORDER BY saved_at DESC"
+                ).fetchall()
+                return [r[0] for r in rows]
+            except Exception:
+                return []
+            finally:
+                conn.close()
+
+        return await asyncio.to_thread(_list)
+
+    async def delete_context(self, context_name: str) -> bool:
+        """Delete a saved context snapshot."""
+        def _delete() -> bool:
+            conn = self._connect()
+            try:
+                with conn:
+                    cur = conn.execute(
+                        "DELETE FROM context_snapshots WHERE name=?", (context_name,)
+                    )
+                return cur.rowcount > 0
+            finally:
+                conn.close()
+
+        return await asyncio.to_thread(_delete)
+
+
 
 class SQLiteMemory:
     """Synchronous SQLite memory with FTS5 search."""

@@ -38,9 +38,45 @@ class StreamConfig:
     resolution_4k: str = "3840x2160"
     resolution_1080p: str = "1920x1080"
     webp_quality: int = 80         # WebP compression quality (0-100)
-    webp_fps: int = 10             # WebP frame capture rate
+    webp_fps: int = 60             # Feature #27: 60 FPS streaming (was 10)
     enable_webrtc: bool = True
     enable_qoi: bool = True
+    enable_https: bool = False     # Feature #41 TLS flag
+    # Feature #33: YAML per-agent desktop config override
+    agent_id: str = ""
+    yaml_config_path: str | None = None  # path to per-agent YAML file
+    high_dpi_scale: float = 1.0   # Feature #31 HiDPI/retina scale factor
+
+    @classmethod
+    def from_yaml(cls, path: str, agent_id: str = "") -> "StreamConfig":
+        """Feature #33 — Load per-agent desktop config from a YAML file.
+
+        YAML format example::
+
+            agent_id: agent-7
+            display: ":7"
+            resolution_4k: "3840x2160"
+            webp_fps: 60
+            webp_quality: 85
+            enable_webrtc: true
+            high_dpi_scale: 2.0
+        """
+        try:
+            import yaml
+            with open(path, encoding="utf-8") as f:
+                data = yaml.safe_load(f) or {}
+            # Filter to known fields
+            valid = {k: v for k, v in data.items() if k in cls.__dataclass_fields__}
+            inst = cls(**valid)
+            if agent_id:
+                object.__setattr__(inst, "agent_id", agent_id)
+            return inst
+        except ImportError:
+            logger.warning("PyYAML not installed — using default StreamConfig")
+            return cls(agent_id=agent_id)
+        except Exception as exc:
+            logger.warning("Failed to load YAML stream config from %s: %s", path, exc)
+            return cls(agent_id=agent_id)
 
 
 class StreamManager:
@@ -159,33 +195,50 @@ class StreamManager:
 
     def get_url(self, auth_key: str | None = None) -> str:
         """Return the primary KasmVNC/WebRTC URL."""
-
+        scheme = "https" if self.config.enable_https else "http"
         query = f"?token={auth_key}" if auth_key else ""
-        return f"http://{self.config.host}:{self.config.vnc_port}/{query}"
+        return f"{scheme}://{self.config.host}:{self.config.vnc_port}/{query}"
 
     def get_4k_url(self, auth_key: str | None = None) -> str:
-        """Return the high-resolution stream URL."""
-
+        """Return the high-resolution 4K stream URL."""
+        scheme = "https" if self.config.enable_https else "http"
         query = f"?token={auth_key}&quality=4k" if auth_key else "?quality=4k"
-        return f"http://{self.config.host}:{self.config.vnc_port}/{query}"
+        # Feature #31: include HiDPI scale factor
+        if self.config.high_dpi_scale != 1.0:
+            query += f"&dpi_scale={self.config.high_dpi_scale}"
+        return f"{scheme}://{self.config.host}:{self.config.vnc_port}/{query}"
 
     def get_1080p_url(self, auth_key: str | None = None) -> str:
-        """Return the lower-bandwidth stream URL."""
-
+        """Return the 1080p stream URL."""
+        scheme = "https" if self.config.enable_https else "http"
         query = f"?token={auth_key}&quality=1080p" if auth_key else "?quality=1080p"
-        return f"http://{self.config.host}:{self.config.vnc_port}/{query}"
+        return f"{scheme}://{self.config.host}:{self.config.vnc_port}/{query}"
 
     def get_hls_url(self, auth_key: str | None = None) -> str:
         """Return the fallback HLS manifest URL."""
-
         query = f"?token={auth_key}" if auth_key else ""
         return f"http://{self.config.host}:{self.config.hls_port}/index.m3u8{query}"
 
     def get_webp_url(self, auth_key: str | None = None) -> str:
-        """Return the WebP frame-push stream URL (new KasmVNC-inspired codec)."""
-
+        """Return the WebP frame-push stream URL."""
         query = f"?token={auth_key}" if auth_key else ""
         return f"http://{self.config.host}:{self.config.webp_port}/stream{query}"
+
+    def get_stream_info(self) -> dict:
+        """Return a dict summarising all stream endpoints and capabilities."""
+        return {
+            "agent_id":       self.config.agent_id,
+            "mode":           self._mode,
+            "vnc_url":        self.get_url(),
+            "webp_url":       self.get_webp_url(),
+            "qoi_url":        f"http://{self.config.host}:{self.config.webp_port}/qoi",
+            "webrtc_url":     f"ws://{self.config.host}:{self.config.webp_port}/webrtc",
+            "hls_url":        self.get_hls_url(),
+            "fps":            self.config.webp_fps,
+            "resolution_4k":  self.config.resolution_4k,
+            "high_dpi_scale": self.config.high_dpi_scale,
+            "enable_https":   self.config.enable_https,
+        }
 
     # ------------------------------------------------------------------
     # WebP, QOI, and WebRTC streaming (KasmVNC-inspired modern codecs)
@@ -340,23 +393,62 @@ class StreamManager:
                     break
             return response
 
+        # Feature #29 — WebRTC peer rooms: track connected peers per room
+        _webrtc_rooms: dict[str, list[Any]] = {}
+
         async def _webrtc_handler(request: Any) -> Any:
+            """Feature #29 — WebRTC signaling with full offer/answer/ICE relay.
+
+            Clients connect to /webrtc?room=<room_id> and exchange SDP/ICE
+            candidates. The server relays messages between all peers in a room.
+            """
+            room_id = request.rel_url.query.get("room", "default")
             ws = web.WebSocketResponse()
             await ws.prepare(request)
-            async for msg in ws:
-                if msg.type == web.WSMsgType.TEXT:
-                    try:
-                        data = json.loads(msg.data)
-                        # Broadcast or loopback WebRTC SDP signalling messages
-                        await ws.send_json(data)
-                    except Exception as e:
-                        logger.error("WebRTC Signaling error: %s", e)
+
+            if room_id not in _webrtc_rooms:
+                _webrtc_rooms[room_id] = []
+            _webrtc_rooms[room_id].append(ws)
+            logger.debug("WebRTC: peer joined room '%s' (peers=%d)", room_id, len(_webrtc_rooms[room_id]))
+
+            try:
+                async for msg in ws:
+                    if msg.type == web.WSMsgType.TEXT:
+                        try:
+                            data = json.loads(msg.data)
+                            # Relay to all other peers in this room
+                            dead = []
+                            for peer in _webrtc_rooms.get(room_id, []):
+                                if peer is ws:
+                                    continue
+                                try:
+                                    await peer.send_str(msg.data)
+                                except Exception:
+                                    dead.append(peer)
+                            for d in dead:
+                                _webrtc_rooms[room_id].remove(d)
+                        except Exception as e:
+                            logger.error("WebRTC relay error in room '%s': %s", room_id, e)
+                    elif msg.type in (web.WSMsgType.ERROR, web.WSMsgType.CLOSE):
+                        break
+            finally:
+                if room_id in _webrtc_rooms and ws in _webrtc_rooms[room_id]:
+                    _webrtc_rooms[room_id].remove(ws)
             return ws
 
+        async def _stream_info_handler(request: Any) -> Any:
+            """Return stream capabilities and all endpoint URLs as JSON."""
+            import json as _json
+            return web.Response(
+                content_type="application/json",
+                text=_json.dumps(self.get_stream_info()),
+            )
+
         app = web.Application()
-        app.router.add_get("/stream", _webp_handler)
-        app.router.add_get("/qoi", _qoi_handler)
-        app.router.add_get("/webrtc", _webrtc_handler)
+        app.router.add_get("/stream",  _webp_handler)
+        app.router.add_get("/qoi",     _qoi_handler)
+        app.router.add_get("/webrtc",  _webrtc_handler)
+        app.router.add_get("/info",    _stream_info_handler)
 
         runner = web.AppRunner(app)
         await runner.setup()
@@ -364,6 +456,6 @@ class StreamManager:
         await site.start()
         self._processes.append(runner)
         logger.info(
-            "Unified stream server (WebP/QOI/WebRTC) started at http://%s:%d/",
-            config.host, config.webp_port
+            "Unified stream server (WebP/QOI/WebRTC@60fps) started at http://%s:%d/",
+            config.host, config.webp_port,
         )
