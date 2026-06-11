@@ -1,0 +1,1330 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>SuperAgent — DOM Vision</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <style>
+    /* ── Reset & Base ─────────────────────────────────────────── */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg:           #0a0b0f;
+      --surface:      #111318;
+      --surface2:     #181b22;
+      --border:       #252a36;
+      --accent:       #6c63ff;
+      --accent2:      #a78bfa;
+      --danger:       #ef4444;
+      --danger-glow:  rgba(239,68,68,0.35);
+      --success:      #10b981;
+      --success-glow: rgba(16,185,129,0.35);
+      --amber:        #f59e0b;
+      --amber-glow:   rgba(245,158,11,0.35);
+      --text:         #e2e8f0;
+      --muted:        #64748b;
+      --agent-color:  #6c63ff;
+      --user-color:   #10b981;
+      --font:         'Inter', sans-serif;
+      --mono:         'JetBrains Mono', monospace;
+    }
+
+    html, body {
+      height: 100%;
+      background: var(--bg);
+      color: var(--text);
+      font-family: var(--font);
+      overflow: hidden;
+    }
+
+    /* ── Layout ───────────────────────────────────────────────── */
+    .app {
+      display: grid;
+      grid-template-rows: 54px 1fr 48px;
+      height: 100vh;
+    }
+
+    /* ── Top Bar ──────────────────────────────────────────────── */
+    .topbar {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      padding: 0 20px;
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      z-index: 100;
+    }
+
+    .logo {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-weight: 700;
+      font-size: 15px;
+      letter-spacing: -0.3px;
+    }
+
+    .logo-icon {
+      width: 28px;
+      height: 28px;
+      background: linear-gradient(135deg, var(--accent), var(--accent2));
+      border-radius: 8px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 14px;
+    }
+
+    .separator { flex: 1; }
+
+    /* Agent ID badge */
+    .agent-badge {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 5px 12px;
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      font-size: 12px;
+      font-family: var(--mono);
+    }
+
+    /* Control mode indicator */
+    .control-mode {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 5px 14px;
+      border-radius: 8px;
+      font-size: 12px;
+      font-weight: 600;
+      border: 1px solid;
+      transition: all 0.4s ease;
+    }
+
+    .control-mode.agent-mode {
+      background: rgba(108,99,255,0.15);
+      border-color: rgba(108,99,255,0.4);
+      color: var(--accent2);
+    }
+
+    .control-mode.user-mode {
+      background: rgba(16,185,129,0.15);
+      border-color: rgba(16,185,129,0.4);
+      color: var(--success);
+    }
+
+    .pulse {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      animation: pulse-anim 1.5s ease-in-out infinite;
+    }
+
+    .agent-mode .pulse { background: var(--accent2); }
+    .user-mode .pulse  { background: var(--success); }
+
+    @keyframes pulse-anim {
+      0%, 100% { opacity: 1; transform: scale(1); }
+      50%       { opacity: 0.5; transform: scale(0.7); }
+    }
+
+    /* FPS / stream info */
+    .stream-stats {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      font-size: 11px;
+      font-family: var(--mono);
+      color: var(--muted);
+    }
+
+    .stat-chip {
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      padding: 3px 8px;
+      background: var(--surface2);
+      border-radius: 4px;
+      border: 1px solid var(--border);
+    }
+
+    .stat-chip.live { color: var(--success); border-color: rgba(16,185,129,0.3); }
+    .stat-chip.warn { color: var(--amber);   border-color: rgba(245,158,11,0.3); }
+
+    /* ── Main Viewport ────────────────────────────────────────── */
+    .viewport {
+      position: relative;
+      overflow: hidden;
+      background: #000;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    /* The desktop stream image */
+    #desktop-stream {
+      max-width: 100%;
+      max-height: 100%;
+      object-fit: contain;
+      display: block;
+      transition: filter 0.3s ease;
+    }
+
+    /* ── Agent Lock Overlay ───────────────────────────────────── */
+    /*  This transparent layer sits on top of the stream and
+        captures all user mouse/keyboard events while agent is in control. */
+    #agent-lock {
+      position: absolute;
+      inset: 0;
+      cursor: not-allowed;
+      z-index: 20;
+      transition: opacity 0.4s ease;
+    }
+
+    #agent-lock.hidden {
+      pointer-events: none;
+      opacity: 0;
+    }
+
+    /* Scanning line effect — shows agent is actively processing */
+    #agent-lock::after {
+      content: '';
+      position: absolute;
+      left: 0;
+      right: 0;
+      height: 2px;
+      background: linear-gradient(90deg, transparent, var(--accent), transparent);
+      animation: scanline 2.5s linear infinite;
+      opacity: 0.6;
+    }
+
+    @keyframes scanline {
+      0%   { top: 0%; }
+      100% { top: 100%; }
+    }
+
+    /* Corner brackets — agent is "seeing" the screen */
+    #agent-lock::before {
+      content: '';
+      position: absolute;
+      inset: 12px;
+      border: 1.5px solid rgba(108,99,255,0.25);
+      border-radius: 4px;
+      pointer-events: none;
+      animation: bracket-pulse 3s ease-in-out infinite;
+    }
+
+    @keyframes bracket-pulse {
+      0%, 100% { border-color: rgba(108,99,255,0.25); }
+      50%       { border-color: rgba(108,99,255,0.55); }
+    }
+
+    /* ── Status HUD (shows on top of stream) ─────────────────── */
+    .hud {
+      position: absolute;
+      z-index: 30;
+      pointer-events: none;
+    }
+
+    /* Top-left: Agent action ticker */
+    .hud-action {
+      top: 16px;
+      left: 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+
+    .action-badge {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 6px 12px;
+      background: rgba(10,11,15,0.88);
+      border: 1px solid rgba(108,99,255,0.4);
+      border-radius: 8px;
+      backdrop-filter: blur(12px);
+      font-size: 12px;
+      font-family: var(--mono);
+      color: var(--accent2);
+      max-width: 340px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .action-badge.user-action {
+      border-color: rgba(16,185,129,0.4);
+      color: var(--success);
+    }
+
+    /* Top-right: Step counter */
+    .hud-steps {
+      top: 16px;
+      right: 16px;
+    }
+
+    .steps-card {
+      background: rgba(10,11,15,0.88);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 10px 14px;
+      text-align: center;
+      backdrop-filter: blur(12px);
+      min-width: 80px;
+    }
+
+    .steps-num {
+      font-size: 26px;
+      font-weight: 700;
+      font-family: var(--mono);
+      color: var(--accent2);
+      line-height: 1;
+    }
+
+    .steps-label {
+      font-size: 10px;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.8px;
+      margin-top: 2px;
+    }
+
+    /* Bottom-left: Objective */
+    .hud-objective {
+      bottom: 16px;
+      left: 16px;
+      max-width: 50%;
+    }
+
+    .objective-card {
+      background: rgba(10,11,15,0.88);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 8px 14px;
+      backdrop-filter: blur(12px);
+      font-size: 12px;
+    }
+
+    .objective-label {
+      font-size: 10px;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.8px;
+      margin-bottom: 4px;
+    }
+
+    .objective-text {
+      color: var(--text);
+      font-weight: 500;
+      line-height: 1.4;
+      display: -webkit-box;
+      -webkit-line-clamp: 2;
+      -webkit-box-orient: vertical;
+      overflow: hidden;
+    }
+
+    /* ── STOP Button + User Takeover ─────────────────────────── */
+    .controls-hud {
+      position: absolute;
+      bottom: 16px;
+      right: 16px;
+      z-index: 50;
+      display: flex;
+      flex-direction: column;
+      align-items: flex-end;
+      gap: 10px;
+      pointer-events: all;
+    }
+
+    /* BIG STOP button */
+    #btn-stop {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 12px 24px;
+      background: linear-gradient(135deg, #dc2626, #b91c1c);
+      border: 1px solid rgba(239,68,68,0.5);
+      border-radius: 12px;
+      color: #fff;
+      font-family: var(--font);
+      font-size: 14px;
+      font-weight: 700;
+      cursor: pointer;
+      letter-spacing: 0.3px;
+      transition: all 0.2s ease;
+      box-shadow: 0 0 20px rgba(239,68,68,0.25), 0 4px 12px rgba(0,0,0,0.4);
+      position: relative;
+      overflow: hidden;
+    }
+
+    #btn-stop::before {
+      content: '';
+      position: absolute;
+      inset: 0;
+      background: linear-gradient(135deg, rgba(255,255,255,0.08), transparent);
+      border-radius: inherit;
+    }
+
+    #btn-stop:hover {
+      transform: translateY(-1px);
+      box-shadow: 0 0 32px rgba(239,68,68,0.5), 0 6px 20px rgba(0,0,0,0.5);
+    }
+
+    #btn-stop:active {
+      transform: translateY(0);
+    }
+
+    #btn-stop:disabled {
+      opacity: 0.4;
+      cursor: not-allowed;
+      transform: none;
+      box-shadow: none;
+    }
+
+    .stop-icon {
+      width: 16px;
+      height: 16px;
+      background: #fff;
+      border-radius: 2px;
+      flex-shrink: 0;
+    }
+
+    /* Resume button — shown after stop */
+    #btn-resume {
+      display: none;
+      align-items: center;
+      gap: 10px;
+      padding: 10px 20px;
+      background: linear-gradient(135deg, #6c63ff, #a78bfa);
+      border: 1px solid rgba(108,99,255,0.5);
+      border-radius: 12px;
+      color: #fff;
+      font-family: var(--font);
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.2s ease;
+      box-shadow: 0 0 16px rgba(108,99,255,0.25), 0 4px 12px rgba(0,0,0,0.4);
+    }
+
+    #btn-resume:hover {
+      transform: translateY(-1px);
+      box-shadow: 0 0 28px rgba(108,99,255,0.45), 0 6px 20px rgba(0,0,0,0.5);
+    }
+
+    /* ── User Control State Overlay ───────────────────────────── */
+    /* Shown briefly when user takes control */
+    #user-takeover-banner {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%) scale(0.9);
+      background: rgba(10,11,15,0.95);
+      border: 1px solid rgba(16,185,129,0.5);
+      border-radius: 16px;
+      padding: 28px 40px;
+      text-align: center;
+      backdrop-filter: blur(20px);
+      z-index: 60;
+      pointer-events: none;
+      opacity: 0;
+      transition: all 0.35s cubic-bezier(0.34, 1.56, 0.64, 1);
+      box-shadow: 0 0 40px rgba(16,185,129,0.2), 0 20px 60px rgba(0,0,0,0.6);
+    }
+
+    #user-takeover-banner.show {
+      opacity: 1;
+      transform: translate(-50%, -50%) scale(1);
+    }
+
+    .takeover-icon {
+      font-size: 40px;
+      margin-bottom: 12px;
+      display: block;
+    }
+
+    .takeover-title {
+      font-size: 20px;
+      font-weight: 700;
+      color: var(--success);
+      margin-bottom: 6px;
+    }
+
+    .takeover-sub {
+      font-size: 13px;
+      color: var(--muted);
+    }
+
+    /* ── Cursor pass-through indicator for user mode ──────────── */
+    .viewport.user-control {
+      cursor: default;
+    }
+
+    .viewport.user-control #desktop-stream {
+      cursor: crosshair;
+    }
+
+    /* Click ripple when user clicks in user-mode */
+    .click-ripple {
+      position: absolute;
+      width: 20px;
+      height: 20px;
+      border-radius: 50%;
+      background: rgba(16,185,129,0.6);
+      pointer-events: none;
+      transform: translate(-50%, -50%) scale(0);
+      animation: ripple-out 0.5s ease-out forwards;
+      z-index: 40;
+    }
+
+    @keyframes ripple-out {
+      0%   { transform: translate(-50%, -50%) scale(0); opacity: 1; }
+      100% { transform: translate(-50%, -50%) scale(4); opacity: 0; }
+    }
+
+    /* ── Bottom Status Bar ────────────────────────────────────── */
+    .statusbar {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      padding: 0 20px;
+      background: var(--surface);
+      border-top: 1px solid var(--border);
+      font-size: 11px;
+      font-family: var(--mono);
+      color: var(--muted);
+    }
+
+    .status-item {
+      display: flex;
+      align-items: center;
+      gap: 5px;
+    }
+
+    .status-dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: var(--muted);
+    }
+
+    .status-dot.green { background: var(--success); box-shadow: 0 0 5px var(--success-glow); }
+    .status-dot.red   { background: var(--danger);  box-shadow: 0 0 5px var(--danger-glow); }
+    .status-dot.amber { background: var(--amber);   box-shadow: 0 0 5px var(--amber-glow); }
+
+    .status-sep { margin: 0 4px; color: var(--border); }
+
+    /* ── Connecting Screen ────────────────────────────────────── */
+    #connecting-screen {
+      position: absolute;
+      inset: 0;
+      background: #000;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 20px;
+      z-index: 80;
+    }
+
+    #connecting-screen.hidden { display: none; }
+
+    .connect-spinner {
+      width: 48px;
+      height: 48px;
+      border: 3px solid var(--border);
+      border-top-color: var(--accent);
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+    }
+
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    .connect-text {
+      font-size: 14px;
+      color: var(--muted);
+      font-family: var(--mono);
+    }
+
+    /* ── Error toast ──────────────────────────────────────────── */
+    #error-toast {
+      position: absolute;
+      top: 70px;
+      left: 50%;
+      transform: translateX(-50%) translateY(-8px);
+      background: rgba(239,68,68,0.95);
+      color: #fff;
+      padding: 10px 20px;
+      border-radius: 8px;
+      font-size: 13px;
+      font-weight: 500;
+      z-index: 90;
+      opacity: 0;
+      pointer-events: none;
+      transition: all 0.3s ease;
+    }
+
+    #error-toast.show {
+      opacity: 1;
+      transform: translateX(-50%) translateY(0);
+    }
+
+    /* ── Config Panel (top-right gear) ───────────────────────── */
+    #config-panel {
+      position: absolute;
+      top: 70px;
+      right: 16px;
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 16px;
+      z-index: 70;
+      width: 260px;
+      display: none;
+      box-shadow: 0 8px 32px rgba(0,0,0,0.5);
+    }
+
+    #config-panel.show { display: block; }
+
+    .config-title {
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.8px;
+      margin-bottom: 12px;
+    }
+
+    .config-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 10px;
+      font-size: 12px;
+    }
+
+    .config-row label { color: var(--text); }
+
+    .config-row input[type="text"],
+    .config-row input[type="number"] {
+      width: 120px;
+      padding: 4px 8px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      color: var(--text);
+      font-family: var(--mono);
+      font-size: 11px;
+    }
+
+    .config-row input:focus {
+      outline: none;
+      border-color: var(--accent);
+    }
+
+    .config-apply {
+      width: 100%;
+      padding: 8px;
+      background: var(--accent);
+      border: none;
+      border-radius: 8px;
+      color: #fff;
+      font-weight: 600;
+      font-size: 12px;
+      cursor: pointer;
+      margin-top: 8px;
+    }
+
+    /* gear button */
+    #btn-config {
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      width: 32px;
+      height: 32px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      color: var(--muted);
+      font-size: 16px;
+      transition: all 0.2s;
+    }
+
+    #btn-config:hover { border-color: var(--accent); color: var(--accent2); }
+
+    /* ── Screenshot download button ───────────────────────────── */
+    #btn-screenshot {
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      width: 32px;
+      height: 32px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      color: var(--muted);
+      font-size: 15px;
+      transition: all 0.2s;
+    }
+
+    #btn-screenshot:hover { border-color: var(--success); color: var(--success); }
+
+    /* Fullscreen button */
+    #btn-fullscreen {
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      width: 32px;
+      height: 32px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      color: var(--muted);
+      font-size: 14px;
+      transition: all 0.2s;
+    }
+
+    #btn-fullscreen:hover { border-color: var(--accent); color: var(--accent2); }
+  </style>
+</head>
+<body>
+<div class="app">
+
+  <!-- ── Top Bar ── -->
+  <header class="topbar">
+    <div class="logo">
+      <div class="logo-icon">🤖</div>
+      SuperAgent
+    </div>
+    <span style="color:var(--border); font-size:18px; font-weight:300">|</span>
+    <span style="font-size:13px; color:var(--muted)">DOM Vision</span>
+
+    <div class="separator"></div>
+
+    <!-- Stream stats -->
+    <div class="stream-stats">
+      <div class="stat-chip" id="stat-fps">
+        <span>⚡</span><span id="fps-val">--</span> FPS
+      </div>
+      <div class="stat-chip" id="stat-ping">
+        <span>📡</span><span id="ping-val">--</span> ms
+      </div>
+      <div class="stat-chip live" id="stat-stream">
+        <span>●</span> LIVE
+      </div>
+    </div>
+
+    <!-- Agent badge -->
+    <div class="agent-badge">
+      🖥 <span id="agent-id-label">agent-001</span>
+    </div>
+
+    <!-- Control mode indicator -->
+    <div class="control-mode agent-mode" id="control-mode-badge">
+      <div class="pulse"></div>
+      <span id="mode-label">Agent in Control</span>
+    </div>
+
+    <!-- Toolbar buttons -->
+    <button id="btn-screenshot" title="Download screenshot">📷</button>
+    <button id="btn-fullscreen" title="Fullscreen">⛶</button>
+    <button id="btn-config" title="Settings">⚙</button>
+  </header>
+
+  <!-- ── Main Viewport ── -->
+  <main class="viewport" id="viewport">
+
+    <!-- Connecting overlay -->
+    <div id="connecting-screen">
+      <div class="connect-spinner"></div>
+      <div class="connect-text">Connecting to agent desktop…</div>
+    </div>
+
+    <!-- Live desktop stream -->
+    <img id="desktop-stream" src="" alt="Agent Desktop" draggable="false" />
+
+    <!-- Agent lock overlay (captures all user events when agent is in control) -->
+    <div id="agent-lock"></div>
+
+    <!-- ── HUD overlays ── -->
+    <!-- Top-left: current action -->
+    <div class="hud hud-action">
+      <div class="action-badge" id="action-badge">
+        <span>🤖</span>
+        <span id="action-text">Waiting for agent…</span>
+      </div>
+    </div>
+
+    <!-- Top-right: step counter -->
+    <div class="hud hud-steps">
+      <div class="steps-card">
+        <div class="steps-num" id="step-count">0</div>
+        <div class="steps-label">Steps</div>
+      </div>
+    </div>
+
+    <!-- Bottom-left: objective -->
+    <div class="hud hud-objective">
+      <div class="objective-card">
+        <div class="objective-label">Objective</div>
+        <div class="objective-text" id="objective-text">No active task</div>
+      </div>
+    </div>
+
+    <!-- Bottom-right: controls -->
+    <div class="controls-hud">
+      <!-- STOP — agent releases control -->
+      <button id="btn-stop">
+        <div class="stop-icon"></div>
+        STOP AGENT
+      </button>
+
+      <!-- RESUME — hand back to agent -->
+      <button id="btn-resume">
+        ▶ Resume Agent
+      </button>
+    </div>
+
+    <!-- User takeover banner (fades in/out) -->
+    <div id="user-takeover-banner">
+      <span class="takeover-icon">👤</span>
+      <div class="takeover-title">You're in Control</div>
+      <div class="takeover-sub">Agent paused · Click anywhere on the desktop</div>
+    </div>
+
+    <!-- Config panel -->
+    <div id="config-panel">
+      <div class="config-title">Stream Settings</div>
+      <div class="config-row">
+        <label>Agent ID</label>
+        <input type="text" id="cfg-agent-id" value="agent-001" />
+      </div>
+      <div class="config-row">
+        <label>HITL Host</label>
+        <input type="text" id="cfg-hitl-host" value="127.0.0.1:9000" />
+      </div>
+      <div class="config-row">
+        <label>Stream Host</label>
+        <input type="text" id="cfg-stream-host" value="127.0.0.1:7081" />
+      </div>
+      <div class="config-row">
+        <label>Desktop API</label>
+        <input type="text" id="cfg-desktop-host" value="127.0.0.1:8000" />
+      </div>
+      <div class="config-row">
+        <label>Target FPS</label>
+        <input type="number" id="cfg-fps" value="30" min="1" max="60" />
+      </div>
+      <button class="config-apply" id="cfg-apply">Apply & Reconnect</button>
+    </div>
+
+    <!-- Error toast -->
+    <div id="error-toast"></div>
+
+  </main>
+
+  <!-- ── Status Bar ── -->
+  <footer class="statusbar">
+    <div class="status-item">
+      <div class="status-dot green" id="dot-stream"></div>
+      <span>Stream</span>
+    </div>
+    <span class="status-sep">·</span>
+    <div class="status-item">
+      <div class="status-dot" id="dot-hitl"></div>
+      <span>HITL API</span>
+    </div>
+    <span class="status-sep">·</span>
+    <div class="status-item">
+      <div class="status-dot" id="dot-desktop"></div>
+      <span>Desktop API</span>
+    </div>
+    <span class="status-sep">·</span>
+    <div class="status-item" id="status-paused" style="display:none">
+      <div class="status-dot amber"></div>
+      <span style="color:var(--amber)">Agent Paused</span>
+    </div>
+    <div class="separator"></div>
+    <span id="status-time" style="color:var(--muted)"></span>
+    <span class="status-sep">·</span>
+    <span id="status-frames">0 frames received</span>
+  </footer>
+
+</div>
+
+<script>
+/* ════════════════════════════════════════════════════════════════════
+   SuperAgent DOM Vision — Control Engine
+   ════════════════════════════════════════════════════════════════════ */
+
+// ── Config (populated from UI) ─────────────────────────────────────
+let CFG = {
+  agentId:     'agent-001',
+  hitlHost:    '127.0.0.1:9000',
+  streamHost:  '127.0.0.1:7081',
+  desktopHost: '127.0.0.1:8000',
+  fps:         30,
+};
+
+// ── State ──────────────────────────────────────────────────────────
+let isAgentInControl = true;   // true  = agent owns desktop
+let streamInterval   = null;
+let statusInterval   = null;
+let frameCount       = 0;
+let lastFrameTime    = Date.now();
+let measuredFps      = 0;
+let framesSinceCalc  = 0;
+
+// ── DOM refs ───────────────────────────────────────────────────────
+const $stream         = document.getElementById('desktop-stream');
+const $lock           = document.getElementById('agent-lock');
+const $viewport       = document.getElementById('viewport');
+const $connecting     = document.getElementById('connecting-screen');
+const $modeBadge      = document.getElementById('control-mode-badge');
+const $modeLabel      = document.getElementById('mode-label');
+const $actionBadge    = document.getElementById('action-badge');
+const $actionText     = document.getElementById('action-text');
+const $stepCount      = document.getElementById('step-count');
+const $objectiveText  = document.getElementById('objective-text');
+const $agentLabel     = document.getElementById('agent-id-label');
+const $takeover       = document.getElementById('user-takeover-banner');
+const $btnStop        = document.getElementById('btn-stop');
+const $btnResume      = document.getElementById('btn-resume');
+const $fpsVal         = document.getElementById('fps-val');
+const $pingVal        = document.getElementById('ping-val');
+const $statusFrames   = document.getElementById('status-frames');
+const $statusTime     = document.getElementById('status-time');
+const $dotHitl        = document.getElementById('dot-hitl');
+const $dotDesktop     = document.getElementById('dot-desktop');
+const $dotStream      = document.getElementById('dot-stream');
+const $statusPaused   = document.getElementById('status-paused');
+const $errorToast     = document.getElementById('error-toast');
+const $configPanel    = document.getElementById('config-panel');
+
+// ── Control mode switching ─────────────────────────────────────────
+
+function setAgentControl() {
+  isAgentInControl = true;
+
+  // Lock overlay — agent owns input
+  $lock.classList.remove('hidden');
+
+  // Badge → purple "Agent in Control"
+  $modeBadge.className = 'control-mode agent-mode';
+  $modeLabel.textContent = 'Agent in Control';
+
+  // Action badge style
+  $actionBadge.classList.remove('user-action');
+
+  // Viewport cursor
+  $viewport.classList.remove('user-control');
+
+  // Buttons
+  $btnStop.style.display = 'flex';
+  $btnResume.style.display = 'none';
+
+  // Status
+  $statusPaused.style.display = 'none';
+
+  // Stream image — clear any dimming
+  $stream.style.filter = '';
+}
+
+function setUserControl() {
+  isAgentInControl = false;
+
+  // Remove agent lock — user now owns input
+  $lock.classList.add('hidden');
+
+  // Badge → green "You're in Control"
+  $modeBadge.className = 'control-mode user-mode';
+  $modeLabel.textContent = 'You\'re in Control';
+
+  // Action badge style
+  $actionBadge.classList.add('user-action');
+  $actionText.textContent = 'User control — interact with the desktop';
+
+  // Viewport cursor
+  $viewport.classList.add('user-control');
+
+  // Buttons — hide STOP, show Resume
+  $btnStop.style.display = 'none';
+  $btnResume.style.display = 'flex';
+
+  // Status
+  $statusPaused.style.display = 'flex';
+
+  // Dim stream slightly to signal agent is paused
+  $stream.style.filter = 'brightness(0.92)';
+
+  // Show takeover banner
+  $takeover.classList.add('show');
+  setTimeout(() => $takeover.classList.remove('show'), 2800);
+}
+
+// ── HITL API calls ─────────────────────────────────────────────────
+
+async function hitlCall(endpoint, method = 'POST', body = null) {
+  const t0 = Date.now();
+  try {
+    const opts = { method, headers: { 'Content-Type': 'application/json' } };
+    if (body) opts.body = JSON.stringify(body);
+    const res = await fetch(`http://${CFG.hitlHost}${endpoint}`, opts);
+    const ping = Date.now() - t0;
+    $pingVal.textContent = ping;
+    $dotHitl.className = 'status-dot green';
+    return res.ok ? await res.json().catch(() => ({})) : null;
+  } catch {
+    $dotHitl.className = 'status-dot red';
+    return null;
+  }
+}
+
+async function stopAgent() {
+  $btnStop.disabled = true;
+  $btnStop.textContent = 'Stopping…';
+
+  const result = await hitlCall('/stop', 'POST');
+
+  if (result !== null) {
+    setUserControl();
+    showToast('Agent stopped — you now control the desktop', 'success');
+  } else {
+    // HITL not reachable — still grant user control locally
+    setUserControl();
+    showToast('HITL unreachable — control granted locally', 'warn');
+  }
+
+  $btnStop.disabled = false;
+  $btnStop.innerHTML = '<div class="stop-icon"></div> STOP AGENT';
+}
+
+async function resumeAgent() {
+  $btnResume.disabled = true;
+  $btnResume.textContent = 'Resuming…';
+
+  const result = await hitlCall('/resume', 'POST');
+
+  if (result !== null) {
+    setAgentControl();
+    showToast('Agent resumed', 'info');
+  } else {
+    showToast('HITL unreachable — check agent connection', 'error');
+  }
+
+  $btnResume.disabled = false;
+  $btnResume.innerHTML = '▶ Resume Agent';
+}
+
+// Poll HITL /status every 2 s to sync state
+async function pollStatus() {
+  const data = await hitlCall('/status', 'GET');
+  if (!data) return;
+
+  // Sync paused state from server truth
+  if (data.paused && isAgentInControl) setUserControl();
+  if (!data.paused && !isAgentInControl) setAgentControl();
+
+  // Update HUD
+  if (data.step_count !== undefined) $stepCount.textContent = data.step_count;
+  if (data.objective)                $objectiveText.textContent = data.objective;
+
+  // Update action text from last instruction
+  if (data.instructions_pending > 0) {
+    $actionText.textContent = `📥 ${data.instructions_pending} pending instruction(s)`;
+  }
+}
+
+// ── Desktop API — forward user clicks/keys to agent desktop ───────
+// When user is in control, clicks on the stream image are forwarded
+// to the Desktop API so the user can actually interact with the AVD.
+
+$viewport.addEventListener('click', async (e) => {
+  if (isAgentInControl) return;           // agent owns it, do nothing
+
+  // Show click ripple
+  const ripple = document.createElement('div');
+  ripple.className = 'click-ripple';
+  ripple.style.left = e.offsetX + 'px';
+  ripple.style.top  = e.offsetY + 'px';
+  $viewport.appendChild(ripple);
+  ripple.addEventListener('animationend', () => ripple.remove());
+
+  // Map click coords from display-space to desktop-space
+  const rect = $stream.getBoundingClientRect();
+  const scaleX = ($stream.naturalWidth  || 1920) / rect.width;
+  const scaleY = ($stream.naturalHeight || 1080) / rect.height;
+  const dx = Math.round((e.clientX - rect.left)  * scaleX);
+  const dy = Math.round((e.clientY - rect.top)   * scaleY);
+
+  try {
+    await fetch(`http://${CFG.desktopHost}/click`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ x: dx, y: dy, button: 'left' }),
+    });
+    $dotDesktop.className = 'status-dot green';
+  } catch {
+    $dotDesktop.className = 'status-dot red';
+  }
+});
+
+// Keyboard forwarding when user is in control
+document.addEventListener('keydown', async (e) => {
+  if (isAgentInControl) return;
+  if (e.target !== document.body && e.target !== $viewport) return;
+
+  try {
+    await fetch(`http://${CFG.desktopHost}/key`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ key: e.key }),
+    });
+  } catch { /* silent */ }
+});
+
+// ── Stream — pull WebP frames from stream server ───────────────────
+
+function startStream() {
+  stopStream();
+  $dotStream.className = 'status-dot amber';
+
+  // Use MJPEG multipart stream directly in the img src
+  const streamUrl = `http://${CFG.streamHost}/stream?t=${Date.now()}`;
+
+  // Try MJPEG first (most compatible)
+  $stream.onerror = () => {
+    // Fallback: poll screenshots from desktop API
+    startPollingFallback();
+    $dotStream.className = 'status-dot amber';
+  };
+
+  $stream.onload = () => {
+    $connecting.classList.add('hidden');
+    $dotStream.className = 'status-dot green';
+  };
+
+  $stream.src = streamUrl;
+
+  // If MJPEG works, frame counting from polling
+  // Start FPS counter via requestAnimationFrame
+  startFpsCounter();
+}
+
+function stopStream() {
+  $stream.src = '';
+  if (streamInterval) { clearInterval(streamInterval); streamInterval = null; }
+}
+
+// Fallback: poll /screenshot from desktop API
+function startPollingFallback() {
+  if (streamInterval) clearInterval(streamInterval);
+  const interval = Math.round(1000 / CFG.fps);
+
+  streamInterval = setInterval(async () => {
+    try {
+      const t0 = Date.now();
+      const res = await fetch(`http://${CFG.desktopHost}/screenshot?t=${Date.now()}`);
+      if (!res.ok) return;
+
+      const blob = await res.blob();
+      const url  = URL.createObjectURL(blob);
+      const old  = $stream.src;
+      $stream.src = url;
+      if (old && old.startsWith('blob:')) URL.revokeObjectURL(old);
+
+      frameCount++;
+      framesSinceCalc++;
+      $statusFrames.textContent = `${frameCount} frames received`;
+      $connecting.classList.add('hidden');
+      $dotStream.className = 'status-dot green';
+      $pingVal.textContent = Date.now() - t0;
+    } catch {
+      $dotStream.className = 'status-dot red';
+    }
+  }, interval);
+}
+
+// FPS measurement
+function startFpsCounter() {
+  let lastTime = performance.now();
+  let frames   = 0;
+
+  const tick = () => {
+    frames++;
+    const now = performance.now();
+    if (now - lastTime >= 1000) {
+      measuredFps = Math.round(frames * 1000 / (now - lastTime));
+      $fpsVal.textContent = measuredFps;
+      frames   = 0;
+      lastTime = now;
+
+      const chip = document.getElementById('stat-fps');
+      chip.className = measuredFps >= 25 ? 'stat-chip live' :
+                       measuredFps >= 10 ? 'stat-chip warn' : 'stat-chip';
+    }
+    requestAnimationFrame(tick);
+  };
+
+  requestAnimationFrame(tick);
+}
+
+// ── Toast notifications ────────────────────────────────────────────
+
+let toastTimeout = null;
+
+function showToast(msg, type = 'info') {
+  $errorToast.textContent = msg;
+  $errorToast.style.background =
+    type === 'error'   ? 'rgba(239,68,68,0.95)'  :
+    type === 'success' ? 'rgba(16,185,129,0.95)'  :
+    type === 'warn'    ? 'rgba(245,158,11,0.95)'  :
+                         'rgba(108,99,255,0.95)';
+  $errorToast.classList.add('show');
+  if (toastTimeout) clearTimeout(toastTimeout);
+  toastTimeout = setTimeout(() => $errorToast.classList.remove('show'), 3500);
+}
+
+// ── Status bar clock ───────────────────────────────────────────────
+
+function updateClock() {
+  $statusTime.textContent = new Date().toLocaleTimeString();
+}
+
+// ── Config apply ───────────────────────────────────────────────────
+
+function applyConfig() {
+  CFG.agentId     = document.getElementById('cfg-agent-id').value.trim()    || CFG.agentId;
+  CFG.hitlHost    = document.getElementById('cfg-hitl-host').value.trim()   || CFG.hitlHost;
+  CFG.streamHost  = document.getElementById('cfg-stream-host').value.trim() || CFG.streamHost;
+  CFG.desktopHost = document.getElementById('cfg-desktop-host').value.trim()|| CFG.desktopHost;
+  CFG.fps         = parseInt(document.getElementById('cfg-fps').value) || 30;
+  $agentLabel.textContent = CFG.agentId;
+  $configPanel.classList.remove('show');
+  init();
+  showToast('Settings applied — reconnecting…', 'info');
+}
+
+// ── Screenshot download ────────────────────────────────────────────
+
+function downloadScreenshot() {
+  if (!$stream.src) return;
+  const a = document.createElement('a');
+  a.download = `superagent_${CFG.agentId}_${Date.now()}.png`;
+  a.href = $stream.src;
+  a.click();
+}
+
+// ── Fullscreen ─────────────────────────────────────────────────────
+
+function toggleFullscreen() {
+  if (!document.fullscreenElement) {
+    document.documentElement.requestFullscreen().catch(() => {});
+  } else {
+    document.exitFullscreen().catch(() => {});
+  }
+}
+
+// ── Keyboard shortcuts ─────────────────────────────────────────────
+
+document.addEventListener('keydown', (e) => {
+  if (e.target.tagName === 'INPUT') return;
+  // Ctrl+Shift+S = STOP agent
+  if (e.ctrlKey && e.shiftKey && e.key === 'S') { e.preventDefault(); stopAgent(); }
+  // Ctrl+Shift+R = RESUME agent
+  if (e.ctrlKey && e.shiftKey && e.key === 'R') { e.preventDefault(); resumeAgent(); }
+  // F11 = fullscreen
+  if (e.key === 'F11') { e.preventDefault(); toggleFullscreen(); }
+  // Escape = close config panel
+  if (e.key === 'Escape') $configPanel.classList.remove('show');
+});
+
+// ── Block context menu on stream (prevent accidental right-click) ──
+$stream.addEventListener('contextmenu', (e) => e.preventDefault());
+
+// ── Event Wiring ───────────────────────────────────────────────────
+
+$btnStop.addEventListener('click', stopAgent);
+$btnResume.addEventListener('click', resumeAgent);
+
+document.getElementById('btn-screenshot').addEventListener('click', downloadScreenshot);
+document.getElementById('btn-fullscreen').addEventListener('click', toggleFullscreen);
+
+document.getElementById('btn-config').addEventListener('click', (e) => {
+  e.stopPropagation();
+  $configPanel.classList.toggle('show');
+});
+
+document.getElementById('cfg-apply').addEventListener('click', applyConfig);
+
+document.addEventListener('click', (e) => {
+  if (!$configPanel.contains(e.target) && e.target.id !== 'btn-config') {
+    $configPanel.classList.remove('show');
+  }
+});
+
+// ── Init ───────────────────────────────────────────────────────────
+
+function init() {
+  // Stop any running intervals
+  if (statusInterval) clearInterval(statusInterval);
+  stopStream();
+
+  // Set initial state
+  setAgentControl();
+  $agentLabel.textContent = CFG.agentId;
+
+  // Start stream
+  startStream();
+
+  // Poll HITL status every 2 s
+  statusInterval = setInterval(pollStatus, 2000);
+
+  // Clock
+  setInterval(updateClock, 1000);
+  updateClock();
+
+  // Initial status check
+  pollStatus();
+
+  // Check desktop API
+  setInterval(async () => {
+    try {
+      await fetch(`http://${CFG.desktopHost}/health`, { signal: AbortSignal.timeout(1500) });
+      $dotDesktop.className = 'status-dot green';
+    } catch {
+      $dotDesktop.className = 'status-dot red';
+    }
+  }, 3000);
+}
+
+// Boot
+window.addEventListener('load', init);
+
+// ── Read URL params (allow ?agent=agent-003&hitl=localhost:9003) ───
+(function readUrlParams() {
+  const p = new URLSearchParams(location.search);
+  if (p.get('agent'))  CFG.agentId     = p.get('agent');
+  if (p.get('hitl'))   CFG.hitlHost    = p.get('hitl');
+  if (p.get('stream')) CFG.streamHost  = p.get('stream');
+  if (p.get('desktop'))CFG.desktopHost = p.get('desktop');
+  if (p.get('fps'))    CFG.fps         = parseInt(p.get('fps'));
+  // Sync to config UI
+  document.getElementById('cfg-agent-id').value   = CFG.agentId;
+  document.getElementById('cfg-hitl-host').value  = CFG.hitlHost;
+  document.getElementById('cfg-stream-host').value= CFG.streamHost;
+  document.getElementById('cfg-desktop-host').value = CFG.desktopHost;
+  document.getElementById('cfg-fps').value         = CFG.fps;
+  document.getElementById('agent-id-label').textContent = CFG.agentId;
+})();
+</script>
+</body>
+</html>
